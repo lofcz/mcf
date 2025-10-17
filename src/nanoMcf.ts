@@ -38,9 +38,11 @@ var moduleCommonFunctions = {
     registeredFunctions: [],
     registeredScripts: [],
     loadingPromises: [],
+    loadedModules: [],
+    loadingModules: [],
     minTemplates: true,
     /**
-     * @type {{name: string, callback: function, args: object, argsPacked: bool}[]}
+     * @type {{name: string, callback: function, args: object, argsPacked: boolean}[]}
      */
     signalsToDispatch: [],
     tempTitleOn: false,
@@ -56,15 +58,50 @@ var moduleCommonFunctions = {
     eventAborter: new AbortController(),
     lastBodyScroll: {x: 0, y: 0},
     differ: null,
-    ini: function(name) {
-        //mcf.toast("info", "cau cau");
+    analyticsQueue: [],
+    init: () => {
+
+        const pendingRequires = [];
+        
+        window["reo"] = {
+            require: (moduleName, callback) => {
+                pendingRequires.push({
+                    module: moduleName,
+                    callback: callback
+                });
+            }
+        };
+
+        mcf.requireLib("reo/reolib", () => {
+            pendingRequires.forEach(request => {
+                window["reo"].require(request.module, request.callback);
+            });
+            pendingRequires.length = 0;
+        });
     },
     requireLibCompleted: function(libName) {
-        for (var i = 0; i < moduleCommonFunctions["requireLibCompletedCallbacks_" + libName].length; i++) {
-            moduleCommonFunctions["requireLibCompletedCallbacks_" + libName][i]();
+        if (moduleCommonFunctions["requireLibCompletedCallbacks_" + libName]) {
+            for (var i = 0; i < moduleCommonFunctions["requireLibCompletedCallbacks_" + libName].length; i++) {
+                
+                let obj = moduleCommonFunctions["requireLibCompletedCallbacks_" + libName][i];
+                
+                if (obj.args && obj.fn) {
+                    obj.fn(obj.args);
+                }
+                else if (typeof obj === "function") {
+                    obj();
+                }
+            }
+
+            moduleCommonFunctions["requireLibCompletedCallbacks_" + libName] = [];   
+        }
+    },
+    requireModuleCompleted: function(moduleName) {
+        for (var i = 0; i < moduleCommonFunctions["requireModuleCompletedCallbacks_" + moduleName].length; i++) {
+            moduleCommonFunctions["requireModuleCompletedCallbacks_" + moduleName][i]();
         }
 
-        moduleCommonFunctions["requireLibCompletedCallbacks_" + libName] = [];
+        moduleCommonFunctions["requireModuleCompletedCallbacks_" + moduleName] = [];
     },
     clientHash: () => {
         return new Promise((resolve) => {
@@ -97,21 +134,21 @@ var moduleCommonFunctions = {
     },
     clientInfo: () => {
         return new Promise((resolve) => {
-            mcf.requireLib("info", () => {
+            mcf.requireLib("info", () => { 
                 try {
                     window["getInfo"]().then((result) => {
                         if (result && result.isPrivate) {
                             resolve(ClientInfoResults.Priv);
                             return;
                         }
-
+    
                         resolve(ClientInfoResults.Public);
                         return;
                     });
-                } catch (e) {
-                    resolve(ClientInfoResults.Crash);
-                    return
-                }
+            } catch (e) {
+                resolve(ClientInfoResults.Crash);
+                return
+            }
             });
         });
     },
@@ -176,7 +213,7 @@ var moduleCommonFunctions = {
         for (var observer of mcf.debugObservers) {
             observer.disconnect();
         }
-
+        
         mcf.debugObservers = [];
     },
     /**
@@ -194,12 +231,12 @@ var moduleCommonFunctions = {
                 });
             }
         );
-
+    
         var config = {
             attributes: true,
             attributeOldValue: true
         }
-
+    
         observer.observe(el, config);
         mcf.debugObservers.push(observer);
         return observer;
@@ -217,12 +254,12 @@ var moduleCommonFunctions = {
             libNames = libNames.trim().replaceAll(" ", "").split(",");
         }
 
-        var v = window.localStorage.getItem("appVersion");
+        let v = mcf.getAppVersion();
 
         if (window["mcfDebug"]) {
             v = mcf.guid();
         }
-
+        
         const promises = [];
 
         // @ts-ignore
@@ -250,7 +287,7 @@ var moduleCommonFunctions = {
                     });
 
                     mcf.loadingPromises[libName] = scriptPromise;
-
+                    
                     promises.push({
                         promise: scriptPromise,
                         callback: () => {
@@ -293,14 +330,14 @@ var moduleCommonFunctions = {
                         }
                     });
                 }
-            }
+            }   
         }
-
+        
         if (promises.length > 0) {
             const promisesArr = promises.map(x => x.promise);
             // @ts-ignore
             await Promise.allSettled(promisesArr);
-
+            
             // @ts-ignore
             for (const promise of promises) {
                 promise.callback();
@@ -340,6 +377,53 @@ var moduleCommonFunctions = {
         }
     },
     bodyToggleScroll: (enabled: boolean) => {
+
+        let gutter = document.getElementById("modalGutter");
+        
+        if (gutter) {
+
+            const getScrollbarWidth = (): number => {
+                const outer = document.createElement('div');
+                outer.style.visibility = 'hidden';
+                outer.style.overflow = 'scroll';
+                document.body.appendChild(outer);
+
+                const inner = document.createElement('div');
+                outer.appendChild(inner);
+
+                const scrollbarWidth = outer.offsetWidth - inner.offsetWidth;
+                outer.parentNode?.removeChild(outer);
+
+                return scrollbarWidth;
+            };
+            
+            const hasVScroll = window.innerWidth > document.documentElement.clientWidth;
+            const cStyle = document.body.style || window.getComputedStyle(document.body, "");
+            const isScrollVisible = hasVScroll ||
+                cStyle.overflow == "visible" ||
+                cStyle.overflowY == "visible" ||
+                (hasVScroll && cStyle.overflow == "auto") ||
+                (hasVScroll && cStyle.overflowY == "auto") ||
+                document.querySelector(".components-reconnect-show");
+
+            const scrollbarWidth = getScrollbarWidth();
+
+            if (!enabled) {
+                if (!isScrollVisible) {
+                    gutter.style.width = `${scrollbarWidth}px`;
+                    gutter.style.display = "block";
+                } else {
+                    gutter.style.width = "0px";
+                    gutter.style.display = "none";
+                }
+                document.documentElement.style.scrollbarGutter = "auto";
+            } else {
+                gutter.style.width = "0px";
+                gutter.style.display = "none";
+                document.documentElement.style.scrollbarGutter = "stable";
+            }
+        }
+
         var hasVScroll = window.innerWidth > document.documentElement.clientWidth;
         var cStyle = document.body.style || window.getComputedStyle(document.body, "");
         hasVScroll = hasVScroll || cStyle.overflow == "visible" || cStyle.overflowY == "visible" || (hasVScroll && cStyle.overflow == "auto") || (hasVScroll && cStyle.overflowY == "auto");
@@ -364,31 +448,31 @@ var moduleCommonFunctions = {
     },
     getErrorsInInterval: (seconds) => {
         return 0; // [todo] fix err.date.getTime(); crashing
-
+        
         var errors = localStorage.getItem("serverErrors");
         var errorsArr = [];
         var inTime = 0;
 
         if (errors && errors.length > 0) {
             errorsArr = JSON.parse(errors);
-        }
-
+        } 
+        
         for (var i = errorsArr.length - 1; i >= 0; i--) {
             var err = errorsArr[i];
 
             console.log(err);
-
+            
             var dif = new Date().getTime() - err.date.getTime();
-
+            
             console.log(dif);
-
+            
             var secs = Math.abs(dif) / 1000;
 
             mcf.toast("ok", "test" + secs);
-
+            
             if (secs <= seconds) {
                 inTime++;
-
+                
                 if (inTime >= 10) {
                     break;
                 }
@@ -397,7 +481,7 @@ var moduleCommonFunctions = {
                 break;
             }
         }
-
+        
         return inTime;
     },
     getErrors: (remove = false) => {
@@ -407,30 +491,30 @@ var moduleCommonFunctions = {
         if (errors && errors.length > 0) {
             errorsArr = JSON.parse(errors);
         }
-
+        
         if (remove) {
-            localStorage.setItem("serverErrors", "");
+            localStorage.setItem("serverErrors", "");   
         }
-
+        
         return errorsArr;
     },
     storeError: (exception) => {
         var errors = localStorage.getItem("serverErrors");
         var errorsArr = [];
-
+        
         if (errors && errors.length > 0) {
             errorsArr = JSON.parse(errors);
         }
-
+        
         errorsArr.push({
             date: new Date(),
             exception: JSON.parse(exception)
         })
-
+        
         localStorage.setItem("serverErrors", JSON.stringify(errorsArr));
-
+        
         var inDelta = mcf.getErrorsInInterval(10);
-
+        
         if (inDelta >= 10) {
             // @ts-ignore
             window.location = "/bugsplash";
@@ -442,7 +526,7 @@ var moduleCommonFunctions = {
      * @param polyfillLib
      */
     polyfill: (windowKey : string, polyfillLib : string) => {
-
+        
     },
     setAppVersion: (entropyIIID : string) => {
         window.localStorage.setItem("appVersion", entropyIIID);
@@ -453,52 +537,14 @@ var moduleCommonFunctions = {
         location.reload(true);
     },
     log: (data: any) => {
-        console.log(data);
+        console.log(data);  
     },
-    focus: (id: string): boolean => {
-        const el = document.getElementById(id);
-
+    focus: (id : string) => {
+        var el = document.getElementById(id);
+        
         if (el) {
             el.focus();
-
-            const getScrollParent = (node) => {
-                if (!node || node === document.body) {
-                    return document.body;
-                }
-
-                const style = getComputedStyle(node);
-                const overflowY = style.overflowY;
-                const isScrollable = overflowY === 'auto' || overflowY === 'scroll';
-
-                if (isScrollable && node.scrollHeight > node.clientHeight) {
-                    return node;
-                }
-
-                return getScrollParent(node.parentNode);
-            };
-
-            const scrollParent = getScrollParent(el);
-
-            if (scrollParent) {
-                const rect = el.getBoundingClientRect();
-                const parentRect = scrollParent.getBoundingClientRect();
-                const isVisible = (rect.top >= parentRect.top) && (rect.bottom <= parentRect.bottom);
-
-                if (!isVisible) {
-                    const scrollTop = rect.top - parentRect.top + scrollParent.scrollTop;
-                    scrollParent.scrollTo({
-                        top: scrollTop - scrollParent.clientHeight / 2 + rect.height / 2,
-                        behavior: 'instant'
-                    });
-                }
-            } else {
-                el.scrollIntoView({ behavior: 'instant', block: 'nearest' });
-            }
-
-            return true;
         }
-
-        return false;
     },
     select: (id : string) => {
         var el = document.getElementById(id) as HTMLInputElement;
@@ -552,7 +598,7 @@ var moduleCommonFunctions = {
             return await mcf.requireLibArrAsync(libName, callback, forceLoad, autoPath);
         }
 
-        var v = window.localStorage.getItem("appVersion");
+        let v = mcf.getAppVersion();
 
         if (window["mcfDebug"]) {
             v = mcf.guid();
@@ -618,39 +664,156 @@ var moduleCommonFunctions = {
             }
         }
     },
+    getAppVersion: () => {
+        let v = "x";
+        
+        if (window["mcfIsolatedContext"]) {
+            return v;
+        }
+
+        try {
+            v = window.localStorage.getItem("appVersion");
+        }
+        catch {
+
+        }
+        
+        return v;
+    },
+    requireModuleAsync: async function (moduleName, callback = function () {}, forceLoad = false, autoPath = true) {
+        if (Array.isArray(moduleName) || moduleName.includes(",")) {
+            return await mcf.requireModuleArrAsync(moduleName, callback, forceLoad, autoPath);
+        }
+
+        let v = mcf.getAppVersion();
+
+        if (window["mcfDebug"]) {
+            v = mcf.guid();
+        }
+
+        if (moduleCommonFunctions.loadedModules.includes(moduleName)) {
+            callback();
+        } else {
+            if (!moduleCommonFunctions.loadingModules.includes(moduleName) && !forceLoad) {
+                moduleCommonFunctions.loadingModules.push(moduleName);
+                moduleCommonFunctions["requireModuleCompletedCallbacks_" + moduleName] = [callback];
+
+                var path = `/Scripts/${moduleName}.js?v=${v}`;
+
+                if (!autoPath) {
+                    path = moduleName;
+                }
+
+                var scriptPromise = new Promise((resolve, reject) => {
+                    const script = document.createElement('script');
+                    document.body.appendChild(script);
+                    script.type = "module";
+                    script.onload = resolve;
+                    script.onerror = reject;
+                    script.async = false;
+                    script.src = path;
+                });
+
+                mcf.loadingPromises[moduleName] = scriptPromise;
+                await scriptPromise;
+
+                moduleCommonFunctions.loadedModules.push(moduleName);
+                moduleCommonFunctions.requireModuleCompleted(moduleName);
+            }
+            else if (!forceLoad) {
+                moduleCommonFunctions["requireModuleCompletedCallbacks_" + moduleName].push(callback);
+
+                if (moduleCommonFunctions.loadingPromises[moduleName]) {
+                    await moduleCommonFunctions.loadingPromises[moduleName];
+                }
+            }
+            else {
+                moduleCommonFunctions["requireModuleCompletedCallbacks_" + moduleName] = [callback];
+                var path = `/Scripts/${moduleName}.js?v=${v}`;
+
+                if (!autoPath) {
+                    path = moduleName;
+                }
+
+                var scriptPromise = new Promise((resolve, reject) => {
+                    const script = document.createElement('script');
+                    document.body.appendChild(script);
+                    script.type = "module";
+                    script.onload = resolve;
+                    script.onerror = reject;
+                    script.async = false;
+                    script.src = path;
+                });
+
+                mcf.loadingPromises[moduleName] = scriptPromise;
+                await scriptPromise;
+
+                moduleCommonFunctions.loadedModules.push(moduleName);
+                moduleCommonFunctions.requireModuleCompleted(moduleName);
+            }
+        }
+    },
+    requireModuleArrAsync: async function (moduleNames, callback = function () {}, forceLoad = false, autoPath = true) {
+        if (typeof moduleNames === "string") {
+            moduleNames = moduleNames.split(",");
+        }
+
+        const loadPromises = [];
+
+        for (let i = 0; i < moduleNames.length; i++) {
+            const moduleName = moduleNames[i].trim();
+            if (moduleName) {
+                loadPromises.push(
+                    mcf.requireModuleAsync(moduleName, function () {}, forceLoad, autoPath)
+                );
+            }
+        }
+
+        await Promise.all(loadPromises);
+        callback();
+    },
     /**
      * Načte zadanou JS knihovnu, pokud ještě není v paměti
      * @param {string} libName název knihovny, bez .js, relativně k /Scripts/. Může být také pole knihoven jako CSV "knihovna1, knihovna2" nebo pole ["knihovna1", "knihovna2"]
      * @param {function()} callback funkce, která se provede po načtení knihovny
      * @param {boolean} forceLoad zda knihovnu načíst, i když už v paměti je. Užitečné v některých případech, default = false
      * @param {boolean} autoPath pokud false, použije se absolutní cesta místo relativní
+     * @param {any} args argumenty funkce
      */
-    requireLib: function (libName, callback = function () {}, forceLoad = false, autoPath = true) {
+    requireLib: function (libName, callback: any | null = null, forceLoad = false, autoPath = true, ...args) {
 
         if (Array.isArray(libName) || libName.includes(",")) {
             return mcf.requireLibArr(libName, callback);
         }
 
-        var v = window.localStorage.getItem("appVersion");
+        let v = mcf.getAppVersion();
+        
         var libNameNormalized = libName; // .replace(/[\W_]+/g, "_");
-
+        
         if (window["mcfDebug"]) {
             v = mcf.guid();
         }
 
         if (moduleCommonFunctions.loadedLibs.includes(libNameNormalized)) {
-            callback();
+            if (typeof callback === "function") {
+                callback(...args);   
+            }
         } else {
             if (!moduleCommonFunctions.loadingLibs.includes(libNameNormalized) && !forceLoad) {
                 moduleCommonFunctions.loadingLibs.push(libNameNormalized);
-                moduleCommonFunctions["requireLibCompletedCallbacks_" + libNameNormalized] = [callback];
+                moduleCommonFunctions["requireLibCompletedCallbacks_" + libNameNormalized] = [
+                    {
+                        fn: callback,
+                        args: args
+                    }
+                ];
 
                 var path = '/Scripts/' + libName + `.js?v=${v}`;
 
                 if (!autoPath) {
                     path = libName;
                 }
-
+                
                 var scriptPromise = new Promise((resolve, reject) => {
                     const script = document.createElement('script');
                     document.body.appendChild(script);
@@ -667,10 +830,18 @@ var moduleCommonFunctions = {
 
             }
             else if (!forceLoad) {
-                moduleCommonFunctions["requireLibCompletedCallbacks_" + libNameNormalized].push(callback);
+                moduleCommonFunctions["requireLibCompletedCallbacks_" + libNameNormalized].push({
+                    fn: callback,
+                    args: args
+                });
             }
             else {
-                moduleCommonFunctions["requireLibCompletedCallbacks_" + libNameNormalized] = [callback];
+                moduleCommonFunctions["requireLibCompletedCallbacks_" + libNameNormalized] = [
+                    {
+                        fn: callback,
+                        args: args
+                    }
+                ];
                 var path = '/Scripts/' + libNameNormalized + `.js?v=${v}`;
 
                 if (!autoPath) {
@@ -685,7 +856,7 @@ var moduleCommonFunctions = {
                     script.async = true;
                     script.src = path;
                 });
-
+                
                 scriptPromise.then(() => {
                     moduleCommonFunctions.loadedLibs.push(libNameNormalized);
                     moduleCommonFunctions.requireLibCompleted(libNameNormalized);
@@ -706,16 +877,16 @@ var moduleCommonFunctions = {
      * @param {string} dataNew Nová data
      */
     messageCompress: async (dataOld: string, dataNew: string) : Promise<CompressedMessage> => {
-
+        
         if (dataNew.length < 100) {
             return {
                 data: dataNew,
                 protocol: ClientTransferProtocols.Plaintext
             };
         }
-
+        
         await mcf.requireLibAsync("diffpatch");
-
+        
         if (!mcf.differ) {
             mcf.differ = new window["diff_match_patch"]();
         }
@@ -723,7 +894,7 @@ var moduleCommonFunctions = {
         var diff = mcf.differ;
         var patch = diff.patch_make(dataOld || "", dataNew || "");
         var patchText = diff.patch_toText(patch);
-
+        
         return {
             data: patchText,
             protocol: ClientTransferProtocols.Patch
@@ -746,7 +917,7 @@ var moduleCommonFunctions = {
         }
 
         var cssPromise;
-
+        
         if (container === "body") {
             if (moduleCommonFunctions.loadedCss.includes(sheetName)) {
                 callback();
@@ -760,13 +931,6 @@ var moduleCommonFunctions = {
                     document.body.appendChild(link);
                     moduleCommonFunctions.loadedCss.push(sheetName);
                 });
-            }
-        }
-        else {
-            if (!document.getElementById(container)) {
-                let containerDiv = document.createElement('div');
-                containerDiv.id = container;
-                document.head.appendChild(containerDiv);
             }
         }
 
@@ -799,7 +963,7 @@ var moduleCommonFunctions = {
         if (cssPromise) {
             await cssPromise.then(() => {
                 callback();
-            });
+            });   
         }
     },
     /**
@@ -819,7 +983,7 @@ var moduleCommonFunctions = {
             if (moduleCommonFunctions.loadedCss.includes(sheetName)) {
                 callback();
             } else {
-                let link = document.createElement('link');
+                var link = document.createElement('link');
                 link.rel = "stylesheet";
                 link.type = "text/css";
                 link.onload = () => {callback();};
@@ -828,16 +992,9 @@ var moduleCommonFunctions = {
                 moduleCommonFunctions.loadedCss.push(sheetName);
             }
         }
-        else {
-            if (!document.getElementById(container)) {
-                let containerDiv = document.createElement('div');
-                containerDiv.id = container;
-                document.head.appendChild(containerDiv);
-            }
-        }
 
         if (mode === "force" || mode === "replace") {
-            let link = document.createElement('link');
+            var link = document.createElement('link');
             link.rel = "stylesheet";
             link.type = "text/css";
             link.onload = () => {callback();};
@@ -850,7 +1007,7 @@ var moduleCommonFunctions = {
         if (moduleCommonFunctions.loadedCss.includes(sheetName)) {
             callback();
         } else {
-            let link = document.createElement('link');
+            var link = document.createElement('link');
             link.rel = "stylesheet";
             link.type = "text/css";
             link.onload = () => {callback();};
@@ -875,11 +1032,11 @@ var moduleCommonFunctions = {
 
         console.log("exec fn called");
         console.log(name);
-
+        
         var a = moduleCommonFunctions.registeredFunctions.filter(x => x.Name === name);
-
+        
         console.log(a);
-
+        
         if (a.length > 0) {
             // @ts-ignore
             return a[0].Fn(...args);
@@ -916,10 +1073,6 @@ var moduleCommonFunctions = {
             }
         }
     },
-    getElementValue: (elId) => {
-        let el = document.getElementById(elId) as HTMLInputElement;
-        return el?.value;
-    },
     /**
      * Dekóduje string
      * @param encodedString enkódovaný string
@@ -939,7 +1092,7 @@ var moduleCommonFunctions = {
     },
     setupObserver: () => {
         mcf.observerInitialized = true;
-
+        
         var observer = new MutationObserver(function(mutations_list) {
             mutations_list.forEach(function(mutation) {
                 mutation.removedNodes.forEach(function(removed_node) {
@@ -948,7 +1101,7 @@ var moduleCommonFunctions = {
                     if (!removed_node.id) {
                         return;
                     }
-
+                    
                     for (var i = 0; i < mcf.observedNodes.length; i++) {
                         var node = mcf.observedNodes[i];
 
@@ -957,12 +1110,12 @@ var moduleCommonFunctions = {
                             //@ts-ignore
                             mcf.toast("info",removed_node.id);
                         }
-
+                        
                         // @ts-ignore
                         if (removed_node.id === node.nodeId) {
                             node.onDelete(node.data);
                             mcf.observedNodes.splice(i, 1);
-                        }
+                        }   
                     }
                 });
             });
@@ -975,7 +1128,7 @@ var moduleCommonFunctions = {
         if (!mcf.observerInitialized) {
             mcf.setupObserver();
         }
-
+        
         mcf.observedNodes.push({
             nodeId: nodeId,
             data: data,
@@ -989,27 +1142,41 @@ var moduleCommonFunctions = {
             window[`tooltipInst_${matchedTooltip.elId}`] = undefined;
             delete window[`tooltipInst_${matchedTooltip.elId}`];
         }
-
+        
         mcf.tooltips = [];
+    },
+    clearIdentity: (key) => {
+        localStorage.removeItem(`identity_${key}`);
+    },
+    identity: (key) => {
+        let existing = localStorage.getItem(`identity_${key}`);
+
+        if (existing) {
+            return existing;
+        }
+
+        let chosenIdentity = mcf.iiid();
+        localStorage.setItem(`identity_${key}`, chosenIdentity);
+        return chosenIdentity;
     },
     tooltipDispose: (elId) => {
         // @ts-ignore
         var matchedTooltip = mcf.tooltips.find(x => x.elId === elId);
-
+    
         if (matchedTooltip) {
             matchedTooltip.inst.destroy();
             window[`tooltipInst_${elId}`] = undefined;
             delete window[`tooltipInst_${elId}`];
-
+            
             var index = mcf.tooltips.indexOf(matchedTooltip);
             mcf.tooltips = mcf.tooltips.splice(index, 1);
             return true;
-        }
-
+        }    
+        
         return false;
     },
     tooltip: async (elId, text, hideOnClick = false, position = "top", persistent = false) => {
-
+        
         await mcf.requireLibAsync("popper2");
         await mcf.requireLibAsync("tippy");
 
@@ -1039,7 +1206,7 @@ var moduleCommonFunctions = {
                 elId: elId,
                 persistent: persistent
             };
-
+            
             mcf.tooltips.push(inst);
             return inst;
         }
@@ -1047,7 +1214,35 @@ var moduleCommonFunctions = {
     navigateTo: (path = '/') => {
         var win: Window = window;
         // @ts-ignore
-        win.location = path;
+        win.location = path;  
+    },
+    clearCookies: async () => {
+        try {
+            await fetch("/api/v1/account/revoke-cookies");
+
+            const domain = window.location.hostname;
+
+            document.cookie.split(';').forEach(cookie => {
+                const name = cookie.trim().split('=')[0];
+                document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/`;
+                document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; domain=${domain}`;
+                document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; domain=.${domain}`;
+
+                if (domain === 'localhost') {
+                    document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; domain=`;
+                }
+            });
+
+            localStorage.clear();
+            sessionStorage.clear();
+
+            // @ts-ignore
+            location.reload(true);
+            return true;
+        }
+        catch (e) {
+            return false;
+        }
     },
     reload: () => {
         location.reload();
@@ -1067,7 +1262,7 @@ var moduleCommonFunctions = {
 
                     var func = new Function(response);
                     var result = func.call(null, 1, 2);
-
+                    
                     callback(result);
                 })
         };
@@ -1089,16 +1284,16 @@ var moduleCommonFunctions = {
                         console.log("eval:");
                         console.log(script.innerHTML);
                         var result = eval(script.innerHTML);
-
+                        
                         console.log("eval result");
                         console.log(result);
-
+                        
                         var obj = {
                             key: name,
                             script: "",
                             scriptLoaded: false
                         };
-
+                        
                         mcf.registeredScripts.push(obj);
 
                         fetch('/scripts/owned/' + name + ".js")
@@ -1107,7 +1302,7 @@ var moduleCommonFunctions = {
                                 obj.script = response;
                                 obj.scriptLoaded = true;
                             })
-
+                        
                         callback(result);
                     })
                 };
@@ -1126,7 +1321,7 @@ var moduleCommonFunctions = {
                     fn.ReadyQue.push(callback);
                 }
             }
-
+            
             // @ts-ignore
             var script = mcf.registeredScripts.find(x => x.key === name);
             if (script !== undefined) {
@@ -1176,7 +1371,7 @@ var moduleCommonFunctions = {
         }
         else {
             var el = document.getElementById(id);
-
+            
             if (el) {
                 el.scrollIntoView({behavior: smooth ? "smooth" : "auto" });
             }
@@ -1185,10 +1380,10 @@ var moduleCommonFunctions = {
     callIfDefined: (ident = "", ...pars) => {
         var identArr = ident.split('.');
         var lastObj = window;
-
+        
         for (var i = 0; i < identArr.length; i++) {
             var part = identArr[i];
-
+            
             if (lastObj[part]) {
                 if (i === identArr.length - 1) {
                     // @ts-ignore
@@ -1208,23 +1403,55 @@ var moduleCommonFunctions = {
             window[obj]["dispose"](obj);
         }
     },
-    scrollToOffset: (elId = "", offset = 100) =>{
-        var element = document.getElementById(elId);
-        var headerOffset = offset;
-        var elementPosition = element.getBoundingClientRect().top;
-        var offsetPosition = elementPosition + window.pageYOffset - headerOffset;
+    scrollToOffset: (elId: string | HTMLElement, offset: number = 200, scroll: "instant" | "auto" | "smooth" = "smooth") => {
+        var element = (typeof elId === 'string' || elId instanceof String) ? document.getElementById(elId as string) : elId;
+
+        if (!element) {
+            return;
+        }
+
+        // if we are in a virtual scroll container we have to scroll the container
+        var scrollbarContainer = element.closest(".edScrollbar");
+
+        if (!scrollbarContainer) {
+            var offsetPosition = element.getBoundingClientRect().top + window.pageYOffset - offset;
+
+            setTimeout(() => {
+                // @ts-ignore
+                window.scrollTo({
+                    top: offsetPosition,
+                    // @ts-ignore
+                    behavior: scroll
+                });
+            }, 50);
+            return;
+        }
+
+        var scrollbarApi = window[`scrollbarApi_${scrollbarContainer.id}`];
+
+        if (!scrollbarApi) {
+            return;
+        }
+
+        var scrollableContainer = scrollbarApi.getContentEl();
+
+        if (!scrollbarContainer) {
+            return;
+        }
+
+        var offsetPosition = Math.max(0, element.offsetTop - offset);
 
         setTimeout(() => {
-            window.scrollTo({
+            scrollableContainer.scrollTo({
                 top: offsetPosition,
-                behavior: "smooth"
+                behavior: scroll
             });
         }, 50);
     },
     scrollToElement: (elId: string) => {
-
+        
         var el = document.getElementById(elId);
-
+        
         if (!el) {
             return;
         }
@@ -1232,11 +1459,45 @@ var moduleCommonFunctions = {
         var headerOffset = 45;
         var elementPosition = el.getBoundingClientRect().top;
         var offsetPosition = elementPosition + window.pageYOffset - headerOffset;
-
+        
         window.scrollTo({ left: 0, top: offsetPosition });
     },
     scrollToBottom: () => {
         window.scrollTo({ left: 0, top: document.body.scrollHeight, behavior: "smooth" });
+    },
+    getWindowScroll: () => {
+        return {
+            x: window.pageXOffset || document.documentElement.scrollLeft,
+            y: window.pageYOffset || document.documentElement.scrollTop
+        };
+    },
+    setWindowScroll: (x, y) => {
+        window.scrollTo(x, y);
+    },
+    scrollElementToBottom: (selector) => {
+        const element = document.querySelector(selector);
+        
+        if (element) {
+            element.scrollTop = element.scrollHeight;   
+        }
+    },
+    elementHeight: (elSelector) => {
+        function getOffsetHeight(el) {
+            var hh = 0;
+            if (el) {
+                hh = el.clientHeight;
+                if (el.style.paddingTop != "") {
+                    hh += parseInt(el.style.paddingTop);
+                }
+                if (el.style.paddingBottom != "") {
+                    hh += parseInt(el.style.paddingBottom);
+                }
+            }
+            return hh;
+        }
+        
+        let el = document.querySelector(elSelector);
+        return el !== undefined ? getOffsetHeight(el) : 0;
     },
     postAsync: async (url, data) => {
         let hdrs = new Headers();
@@ -1248,10 +1509,10 @@ var moduleCommonFunctions = {
             headers: hdrs,
             method: "POST"
         });
-
+        
         return await fetchResult.json();
     },
-    post: function(url, data, callback = (data) => {}, antiforgery = "", async = true, cType = "") {
+    post: function(url, data, callback = (data) => {}, antiforgery = "", async = true, cType = "application/x-www-form-urlencoded", abortController = null) {
 
         function isJson(str) {
             try {
@@ -1270,46 +1531,71 @@ var moduleCommonFunctions = {
             hdrs.append("Content-Type", cType);
         }
 
-        if (antiforgery === "") {
-            fetch(url,
-                {
-                    body: new URLSearchParams(data),
-                    headers: hdrs,
-                    method: "POST",
-                }).then(x => x.text()).then(data => {
-                if (isJson(data)) {
-                    callback(JSON.parse(data));
-                }
-                else {
-                    mcf.toast("error",`Požadavek na server, adresa ${url} skončil neošetřenou chybou:<br/>${data}<br/>Kontaktuj prosím podporu / nahlas chybu v našem úkolovacím systému (obojí z bočního menu). Děkujeme!`);
-                }
-            });
+        // @ts-ignore
+        var encoded = new URLSearchParams(data).toString();
+
+        console.log(encoded);
+        
+        var signal = undefined;
+        
+        if (abortController) {
+            signal = abortController.signal;
         }
-        else {
+        
+        try {
+            if (antiforgery === "") {
+                fetch(url,
+                    {
+                        body: encoded,
+                        headers: hdrs,
+                        method: "POST",
+                        signal: signal
+                    }).then(async x => {
 
-            if (window[antiforgery] === undefined || window[antiforgery] === false) {
-                window[antiforgery] = true;
+                    if (!x.ok) {
+                        const text = await x.text();
+                        throw new Error(text);
+                    }
 
-                if (async) {
-                    fetch(url,
-                        {
-                            body: new URLSearchParams(data),
-                            headers: hdrs,
-                            method: "POST",
-                        }).then(x => x.text()).then(data => {
-                        if (isJson(data)) {
-                            callback(JSON.parse(data));
-                        }
-                        else {
-                            mcf.toast("error",`Požadavek na server, adresa ${url} skončil neošetřenou chybou:<br/>${data}<br/>. Kontaktuj prosím podporu / nahlas chybu v našem úkolovacím systému. Děkujeme!`);
-                        }
-                        window[antiforgery] = false;
-                    });
-                }
-                else {
+                    return x.text()
+                }).then(data => {
+                    if (isJson(data)) {
+                        callback(JSON.parse(data));
+                    }
+                    else {
+                        mcf.toast("error",`Požadavek na server, adresa ${url} skončil neošetřenou chybou:<br/>${data}<br/>Kontaktuj prosím podporu / nahlas chybu v našem úkolovacím systému (obojí z bočního menu). Děkujeme!`);
+                    }
+                });
+            }
+            else {
 
+                if (window[antiforgery] === undefined || window[antiforgery] === false) {
+                    window[antiforgery] = true;
+
+                    if (async) {
+                        fetch(url,
+                            {
+                                body: new URLSearchParams(data),
+                                headers: hdrs,
+                                method: "POST",
+                            }).then(x => x.text()).then(data => {
+                            if (isJson(data)) {
+                                callback(JSON.parse(data));
+                            }
+                            else {
+                                mcf.toast("error",`Požadavek na server, adresa ${url} skončil neošetřenou chybou:<br/>${data}<br/>. Kontaktuj prosím podporu / nahlas chybu v našem úkolovacím systému. Děkujeme!`);
+                            }
+                            window[antiforgery] = false;
+                        });
+                    }
+                    else {
+
+                    }
                 }
             }
+        }
+        catch (e) {
+            console.log(e);
         }
     },
     /**
@@ -1394,6 +1680,12 @@ var moduleCommonFunctions = {
             window["toastr"].clear();
         });
     },
+    firstLetterToUpper: (str) => {
+        return String(str).charAt(0).toUpperCase() + String(str).slice(1);
+    },
+    firstLetterToLower: (str) => {
+        return String(str).charAt(0).toLowerCase() + String(str).slice(1);
+    },
     /**
      * Vytvoří upozornění v pravém horním rohu, které automaticky zmizí po několika sekundách.
      * @param {string} type "[ok|success]|info|[err|error]"
@@ -1451,23 +1743,41 @@ var moduleCommonFunctions = {
     },
     /**
      * Spustí celostránkové načítání, které překryje obsah. Užitečné pro akce, které můžou trvat delší dobu.
-     * @param {string} textToDisplay html, které se má zobrazit při načítaní
-     * @param {number} fadeInTimeMs čas v milisekundách, po který bude trvat fadeIn
      */
-    fullscreenLoadStart: function (textToDisplay, fadeInTimeMs = 300) {
-        // @ts-ignore
-        $("#globalOverlayText").html(textToDisplay);
-        // @ts-ignore
-        $("#overlay").fadeIn(fadeInTimeMs);
+    fullscreenLoadStart: (textToDisplay: string, fadeInTimeMs: number = 300): void => {
+        const overlayText = document.getElementById('globalOverlayText');
+        const overlay = document.getElementById('overlay');
+
+        if (overlayText) {
+            overlayText.innerHTML = textToDisplay;
+        }
+
+        if (overlay) {
+            overlay.style.display = 'block';
+            overlay.style.opacity = '0';
+            overlay.style.transition = `opacity ${fadeInTimeMs}ms`;
+
+            requestAnimationFrame(() => {
+                overlay.style.opacity = '1';
+            });
+        }
     },
     /**
-     * Ukončí celostránkové načítání, tuto funkci je potřeba spustit po použití {@link fullscreenLoadStart}, jinak nebude moci uživatel interagovat se stránkou
-     * @param {number} fadeOutTimeMs čas v milisekundách, po který bude trvat fadeOut
-     * @param {function()} callback funkce, která se spustí po dokončení fadeOut efektu
+     * Ukončí celostránkové načítání, tuto funkci je potřeba spustit po použití {@link fullscreenLoadStart},
+     * jinak nebude moci uživatel interagovat se stránkou
      */
-    fullscreenLoadEnd: function (fadeOutTimeMs = 300, callback = function () {}) {
-        // @ts-ignore
-        $("#overlay").fadeOut(fadeOutTimeMs, callback);
+    fullscreenLoadEnd: (fadeOutTimeMs: number = 300, callback = function () {}): void => {
+        const overlay = document.getElementById('overlay');
+
+        if (overlay) {
+            overlay.style.transition = `opacity ${fadeOutTimeMs}ms`;
+            overlay.style.opacity = '0';
+            
+            setTimeout(() => {
+                overlay.style.display = 'none';
+                callback();
+            }, fadeOutTimeMs);
+        }
     },
     evalScripts: (html) => {
         let container = document.createElement('div');
@@ -1490,31 +1800,31 @@ var moduleCommonFunctions = {
         }
     },
     clearCalls: () => {
-        mcf.callsQue = [];
+      mcf.callsQue = [];  
     },
     registerDispose: (obj: {}, id: string) => {
         if (!obj || !obj["dispose"]) {
             return;
         }
-
+        
         mcf.disposeQue.push({
             obj: obj,
             id: id
         });
     },
     checkForCall: (key : string) => {
-        // @ts-ignore
+       // @ts-ignore
         var call = mcf.callsQue.find(x => x.key === key);
-
-        if (call) {
+       
+       if (call) {
             var index = mcf.callsQue.indexOf(call);
-
+            
             if (index >= 0) {
                 mcf.callsQue.splice(index, 1);
             }
-
+            
             call["fn"](call.data);
-        }
+       }
     },
     registerCall: (fn, data = {}, key : string) => {
 
@@ -1528,9 +1838,9 @@ var moduleCommonFunctions = {
                 mcf.callsQue.splice(index, 1);
             }
         }
-
+        
         data["mcfRegisteredCall"] = true;
-
+        
         mcf.callsQue.push({
             fn: fn,
             data: data,
@@ -1552,10 +1862,10 @@ var moduleCommonFunctions = {
         });
     },
     disposeSafeEvents: () => {
-
+        
         mcf.eventAborter.abort();
         mcf.uniqueEvents.forEach(x => {
-            removeEventListener(x.name, x.fn);
+          removeEventListener(x.name, x.fn);  
         });
         mcf.uniqueEvents = [];
 
@@ -1567,54 +1877,54 @@ var moduleCommonFunctions = {
 
                 x.inst.destroy();
             }
-
+            
             window[`tooltipInst_${x.elId}`] = undefined;
             delete window[`tooltipInst_${x.elId}`];
         });
-
+        
         mcf.tooltips = [];
         mcf.eventAborter = new AbortController();
         mcf.clearCalls();
-
+        
         // @ts-ignore
         for (var x of mcf.disposeQue) {
             if (x && x.obj && x.obj["dispose"]) {
                 x.obj["dispose"](x.id);
             }
         }
-
+        
         mcf.disposeQue = [];
-
+        
         return true;
     },
     toggleCheckbox: (id) => {
-        document.getElementById(id)["checked"] = !document.getElementById(id)["checked"];
+        document.getElementById(id)["checked"] = !document.getElementById(id)["checked"];  
     },
     addSafeEventListener: (elementId, eventName, eventFn = (eventArgs) => {}) => {
 
         // @ts-ignore
         if (mcf.uniqueEvents.find(x => x.name === `mcfUniqueEvent_${elementId}_${eventName}`)) {
             var eventsToRemove = mcf.uniqueEvents.filter(x => x.name === `mcfUniqueEvent_${elementId}_${eventName}`);
-
+            
             for (var i = 0; i < eventsToRemove.length; i++) {
                 document.getElementById(elementId).removeEventListener(eventName, eventsToRemove[i].fn);
             }
 
             mcf.uniqueEvents = mcf.uniqueEvents.filter(x => x.name !== `mcfUniqueEvent_${elementId}_${eventName}`)
         }
-
+        
         // @ts-ignore
         if (!mcf.uniqueEvents.find(x => x.name === `mcfUniqueEvent_${elementId}_${eventName}`)) {
-
+            
             if (!document.getElementById(elementId)) {
                 return false;
             }
-
+            
             try {
                 var finalFn = (e) => {
                     eventFn(e);
                 };
-
+               
                 // @ts-ignore
                 document.getElementById(elementId).addEventListener(eventName, finalFn, { signal: mcf.eventAborter.signal });
 
@@ -1622,22 +1932,22 @@ var moduleCommonFunctions = {
                     name: `mcfUniqueEvent_${elementId}_${eventName}`,
                     fn: finalFn
                 })
-
+                
                 return true;
             }
             catch (e) {
-                return false;
+                return false; 
             }
         }
-
+        
         return false;
     },
     insertHTML: function(html, dest, append= false, prepend = false){
-
+        
         if (typeof dest === 'string') {
             dest = document.getElementById(dest);
         }
-
+        
         if (!append && !prepend) {
             if (dest !== null && dest !== undefined) {
                 dest.innerHTML = '';
@@ -1702,21 +2012,20 @@ var moduleCommonFunctions = {
     },
     eraseCookie: (name) => {
         document.cookie = name + '=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;SameSite=Lax';
+    },
+    getLanguage: () => {
+        return window["mcfUiLang"]?.toLowerCase() || 'cs';
+    },
+    analytics: (data) => {
+        if (window["dataLayer"] && window["dataLayer"].push !== undefined) {
+            window["dataLayer"].push({
+                'event': data.type
+            });
+        }
+        else {
+            mcf.analyticsQueue.push(data);
+        }
     }
 };
 var mcf = moduleCommonFunctions;
-
-// Export pro různé typy modulů
-declare global {
-    interface Window {
-        mcf: typeof moduleCommonFunctions;
-    }
-}
-
-// Přiřazení do window objektu pro použití v prohlížeči
-if (typeof window !== 'undefined') {
-    window.mcf = mcf;
-}
-
-// Export pro module systémy
-export default mcf;
+mcf.init();
